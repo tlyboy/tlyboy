@@ -2,7 +2,7 @@
   <tbody>
     <tr align="center">
       <td>
-        <a href="https://github.com/tlyboy/github-readme-stats">
+        <a href="https://github.com/anuraghazra/github-readme-stats">
           <picture>
             <source
               media="(prefers-color-scheme: dark)"
@@ -17,7 +17,7 @@
         </a>
       </td>
       <td>
-        <a href="https://github.com/tlyboy/github-readme-stats">
+        <a href="https://github.com/anuraghazra/github-readme-stats">
           <picture>
             <source
               media="(prefers-color-scheme: dark)"
@@ -35,7 +35,7 @@
     <tr></tr>
     <tr align="center">
       <td colspan="2">
-        <a href="https://github.com/tlyboy/github-readme-activity-graph">
+        <a href="https://github.com/Ashutosh00710/github-readme-activity-graph">
           <picture>
             <source
               media="(prefers-color-scheme: dark)"
