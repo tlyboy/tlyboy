@@ -6,11 +6,11 @@
           <picture>
             <source
               media="(prefers-color-scheme: dark)"
-              srcset="http://github-readme-stats.tlyboy.com/api?username=tlyboy&title_color=3498db&text_color=ecf0f1&icon_color=3498db&bg_color=00000000&hide_border=true&show_icons=true&include_all_commits=true"
+              srcset="https://github-readme-stats.tlyboy.com/api?username=tlyboy&title_color=3498db&text_color=ecf0f1&icon_color=3498db&bg_color=00000000&hide_border=true&show_icons=true&include_all_commits=true"
             />
             <img
               align="center"
-              src="http://github-readme-stats.tlyboy.com/api?username=tlyboy&title_color=3498db&text_color=121212&icon_color=3498db&bg_color=00000000&hide_border=true&show_icons=true&include_all_commits=true"
+              src="https://github-readme-stats.tlyboy.com/api?username=tlyboy&title_color=3498db&text_color=121212&icon_color=3498db&bg_color=00000000&hide_border=true&show_icons=true&include_all_commits=true"
               alt="Guany's github stats"
             />
           </picture>
@@ -21,11 +21,11 @@
           <picture>
             <source
               media="(prefers-color-scheme: dark)"
-              srcset="http://github-readme-stats.tlyboy.com/api/top-langs/?username=tlyboy&title_color=3498db&text_color=ecf0f1&icon_color=3498db&bg_color=00000000&hide_border=true&layout=compact"
+              srcset="https://github-readme-stats.tlyboy.com/api/top-langs/?username=tlyboy&title_color=3498db&text_color=ecf0f1&icon_color=3498db&bg_color=00000000&hide_border=true&layout=compact"
             />
             <img
               align="center"
-              src="http://github-readme-stats.tlyboy.com/api/top-langs/?username=tlyboy&title_color=3498db&text_color=121212&icon_color=3498db&bg_color=00000000&hide_border=true&layout=compact"
+              src="https://github-readme-stats.tlyboy.com/api/top-langs/?username=tlyboy&title_color=3498db&text_color=121212&icon_color=3498db&bg_color=00000000&hide_border=true&layout=compact"
               alt="Guany's top langs"
             />
           </picture>
