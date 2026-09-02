@@ -40,7 +40,6 @@ Markdown 文档、mermaid 思维导图、待办清单都是同一条命令 —�
 
 ```bash
 tlyboy push 周报.md -p 产品
-claude -p '写份周报' | tlyboy push - -p 产品 --title '第 36 周'
 ```
 
 ## 使用许可
