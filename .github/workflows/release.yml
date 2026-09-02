@@ -1,0 +1,182 @@
+name: release
+
+# Check out and compile binaries for each platform from the private source repo tlyboy/tlyboy-cli, then publish them to this (public) repo's
+# Releases. Following the tlyboy/snoozeyoulose approach: keep the source private, publish the artifacts.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的源码 ref（分支或 tag）'
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  # A separate job just for macOS signing — codesign can only run on macOS.
+  # Cross-compile the other platforms on ubuntu (see build-others).
+  build-macos:
+    runs-on: macos-latest
+    env:
+      # Organization-level Apple signing secrets (available to public repos), named to match snoozeyoulose
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: tlyboy/tlyboy-cli
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          bun build --compile --minify --target=bun-darwin-arm64 index.ts --outfile dist/tlyboy-macos-arm64
+          bun build --compile --minify --target=bun-darwin-x64   index.ts --outfile dist/tlyboy-macos-x64
+
+      - name: Import Apple Developer Certificate
+        run: |
+          # Secret values aren't masked in the run shell env (unlike in if expressions),
+          # so this is a reliable way to check whether a certificate is available
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE 未注入，macOS 将产出未签名构建。"
+            exit 0
+          fi
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import $RUNNER_TEMP/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          echo "SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+
+      - name: Sign
+        run: |
+          if [ -z "$SIGN_IDENTITY" ]; then
+            echo "::warning::没有签名身份，跳过签名与公证。"
+            exit 0
+          fi
+          # --options runtime is required for notarization; so is --timestamp (a secure timestamp).
+          # The output of bun --compile already has Bun's ad-hoc signature; --force replaces it with ours.
+          # Verified that signing doesn't damage the embedded JS payload, and that the hardened runtime flag is applied correctly.
+          for f in dist/tlyboy-macos-*; do
+            codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$f"
+            codesign --verify --strict --verbose=2 "$f"
+          done
+
+      - name: Notarize
+        run: |
+          if [ -z "$SIGN_IDENTITY" ] || [ -z "$APPLE_ID" ]; then
+            echo "::warning::缺少签名身份或 Apple ID，跳过公证。"
+            exit 0
+          fi
+          # notarytool only accepts zip / dmg / pkg, not bare executables, so package them first.
+          # Submit both architectures together to save a round trip.
+          ditto -c -k dist/tlyboy-macos-arm64 $RUNNER_TEMP/arm64.zip
+          ditto -c -k dist/tlyboy-macos-x64   $RUNNER_TEMP/x64.zip
+          for z in arm64 x64; do
+            xcrun notarytool submit "$RUNNER_TEMP/$z.zip" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+          done
+          # Intentionally don't staple: a bare executable has nowhere to store the ticket (.app / .dmg / .pkg
+          # are the containers that support it). The notarization ticket is registered on Apple's servers, and Gatekeeper can verify it online
+          # to allow execution — the tradeoff is that the first run requires a network connection. To avoid warnings even offline, we'd need to ship a
+          # .pkg, which requires an additional Developer ID Installer certificate.
+          echo "已公证。未 staple，Gatekeeper 走联网校验。"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/
+
+  build-others:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: tlyboy/tlyboy-cli
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # Run the tests first, so we don't publish a version that fails tests. The private repo has no CI,
+      # so this is the only gate. Run them in this job only; there's no need to repeat them on macOS.
+      - name: Test
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Read version
+        id: meta
+        run: echo "version=$(bun --print 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      # These three platforms don't need signing; just cross-compile — bun build --compile downloads the Bun runtime for the corresponding platform based on --target
+      # and bundles it into the artifact.
+      - name: Build
+        run: |
+          mkdir -p dist
+          bun build --compile --minify --target=bun-linux-x64     index.ts --outfile dist/tlyboy-linux-x64
+          bun build --compile --minify --target=bun-linux-arm64   index.ts --outfile dist/tlyboy-linux-arm64
+          bun build --compile --minify --target=bun-windows-x64   index.ts --outfile dist/tlyboy-windows-x64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: others
+          path: dist/
+
+  release:
+    needs: [build-macos, build-others]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # The binaries are downloaded from a browser, so provide a checksum to verify their integrity.
+      #
+      # Calculate the checksum for tlyboy-* rather than * — on reruns, dist may already contain a
+      # SHA256SUMS.txt, and `*` would include the file itself.
+      #
+      # chmod is just to make the artifacts in the archive look right: upload-artifact doesn't preserve permission bits,
+      # and release assets don't carry permissions either, so users still need to run chmod themselves (as noted in the README).
+      - name: Checksums
+        run: cd dist && chmod +x tlyboy-* && sha256sum tlyboy-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Publish release
+        run: |
+          # --repo must be specified explicitly: otherwise gh infers the target repository from the git remote
+          #
+          # Intentionally don't use --generate-notes: it generates notes from commits in **this repo**, and here there's only the
+          # README, so the listed items have nothing to do with this release. The source is in a private repo, so an automatic changelog
+          # can't be generated anyway.
+          gh release create "v${{ needs.build-others.outputs.version }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "v${{ needs.build-others.outputs.version }}" \
+            --notes "下载对应平台的二进制，放到 PATH 上并加可执行权限。校验和见 SHA256SUMS.txt。用法见 [README](https://github.com/${{ github.repository }}#readme)。"
