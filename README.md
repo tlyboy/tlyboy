@@ -40,7 +40,6 @@ Markdown documents, mermaid mind maps and task lists all go up the same way — 
 
 ```bash
 tlyboy push report.md -p Product
-claude -p 'write the weekly report' | tlyboy push - -p Product --title 'Week 36'
 ```
 
 ## License
