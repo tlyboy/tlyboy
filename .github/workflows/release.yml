@@ -1,0 +1,182 @@
+name: release
+
+# 从私有源码仓 tlyboy/tlyboy-cli 检出、编译出各平台二进制，发布到本（公开）仓库
+# 的 Releases。照 tlyboy/snoozeyoulose 那套：源码不公开，产物公开。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '要构建的源码 ref（分支或 tag）'
+        default: main
+
+permissions:
+  contents: write
+
+jobs:
+  # macOS 单独一个 job，只为了签名 —— codesign 只能在 macOS 上跑。
+  # 其余平台在 ubuntu 上交叉编译（见 build-others）。
+  build-macos:
+    runs-on: macos-latest
+    env:
+      # 组织级 Apple 签名 secrets（公开仓库可用），名字与 snoozeyoulose 一致
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: tlyboy/tlyboy-cli
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          bun build --compile --minify --target=bun-darwin-arm64 index.ts --outfile dist/tlyboy-macos-arm64
+          bun build --compile --minify --target=bun-darwin-x64   index.ts --outfile dist/tlyboy-macos-x64
+
+      - name: Import Apple Developer Certificate
+        run: |
+          # secret 值在 run 的 shell env 里不会被屏蔽（与 if 表达式不同），
+          # 可靠判断是否有证书
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE 未注入，macOS 将产出未签名构建。"
+            exit 0
+          fi
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import $RUNNER_TEMP/certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk -F'"' '{print $2}')
+          echo "SIGN_IDENTITY=$IDENTITY" >> $GITHUB_ENV
+
+      - name: Sign
+        run: |
+          if [ -z "$SIGN_IDENTITY" ]; then
+            echo "::warning::没有签名身份，跳过签名与公证。"
+            exit 0
+          fi
+          # --options runtime 是公证的前提；--timestamp 也是（安全时间戳）。
+          # bun --compile 的产物本身带 Bun 的 ad-hoc 签名，--force 换成我们的。
+          # 实测签名不会破坏内嵌的 JS 载荷，硬化运行时标志也能正常带上。
+          for f in dist/tlyboy-macos-*; do
+            codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$f"
+            codesign --verify --strict --verbose=2 "$f"
+          done
+
+      - name: Notarize
+        run: |
+          if [ -z "$SIGN_IDENTITY" ] || [ -z "$APPLE_ID" ]; then
+            echo "::warning::缺少签名身份或 Apple ID，跳过公证。"
+            exit 0
+          fi
+          # notarytool 只收 zip / dmg / pkg，不收裸的可执行文件，所以先打包。
+          # 两个架构一起提交，省一次往返。
+          ditto -c -k dist/tlyboy-macos-arm64 $RUNNER_TEMP/arm64.zip
+          ditto -c -k dist/tlyboy-macos-x64   $RUNNER_TEMP/x64.zip
+          for z in arm64 x64; do
+            xcrun notarytool submit "$RUNNER_TEMP/$z.zip" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait
+          done
+          # 刻意不 staple：裸可执行文件没有存放票据的地方（.app / .dmg / .pkg
+          # 才有那个容器）。公证票据登记在 Apple 服务器上，Gatekeeper 联网校验
+          # 即可放行 —— 代价是首次运行需要网络。要做到离线也免提示，得改发
+          # .pkg，而那需要一张额外的 Developer ID Installer 证书。
+          echo "已公证。未 staple，Gatekeeper 走联网校验。"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/
+
+  build-others:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Checkout private source
+        uses: actions/checkout@v4
+        with:
+          repository: tlyboy/tlyboy-cli
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          token: ${{ secrets.SOURCE_TOKEN }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      # 发布前先跑一遍，别把一个测试就挂的版本发出去。私有仓那边没有 CI，
+      # 这是唯一的拦截点。只在这一个 job 里跑，macOS 那边没必要重复。
+      - name: Test
+        run: |
+          bun run typecheck
+          bun test
+
+      - name: Read version
+        id: meta
+        run: echo "version=$(bun --print 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+
+      # 这三个平台不需要签名，交叉编译即可 —— bun build --compile 会按 --target
+      # 下载对应平台的 Bun 运行时打进产物。
+      - name: Build
+        run: |
+          mkdir -p dist
+          bun build --compile --minify --target=bun-linux-x64     index.ts --outfile dist/tlyboy-linux-x64
+          bun build --compile --minify --target=bun-linux-arm64   index.ts --outfile dist/tlyboy-linux-arm64
+          bun build --compile --minify --target=bun-windows-x64   index.ts --outfile dist/tlyboy-windows-x64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: others
+          path: dist/
+
+  release:
+    needs: [build-macos, build-others]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # 二进制是从浏览器下载的，给一份校验和才能验完整性。
+      #
+      # 只对 tlyboy-* 算而不是 * —— 重跑时 dist 里可能已经有一份
+      # SHA256SUMS.txt，`*` 会把它自己也算进去。
+      #
+      # chmod 只是让归档里的产物看起来正常：upload-artifact 不保留权限位，
+      # 而 release 资源本来也不带权限，用户仍要自己 chmod（README 里写了）。
+      - name: Checksums
+        run: cd dist && chmod +x tlyboy-* && sha256sum tlyboy-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Publish release
+        run: |
+          # --repo 必须显式给：不给的话 gh 会从 git remote 推断目标仓库
+          #
+          # 刻意不用 --generate-notes：它按**本仓库**的提交生成，而这里只有
+          # README，列出来的东西和这次发布毫无关系。源码在私有仓，自动变更日志
+          # 本来就给不出来。
+          gh release create "v${{ needs.build-others.outputs.version }}" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "v${{ needs.build-others.outputs.version }}" \
+            --notes "下载对应平台的二进制，放到 PATH 上并加可执行权限。校验和见 SHA256SUMS.txt。用法见 [README](https://github.com/${{ github.repository }}#readme)。"
