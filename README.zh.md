@@ -39,8 +39,25 @@ tlyboy login
 Markdown 文档、mermaid 思维导图、待办清单都是同一条命令 —— 类型和标题从文件里推断：
 
 ```bash
-tlyboy push 周报.md -p 产品
+tlyboy artifact push 周报.md -p 产品
 ```
+
+### 其余命令
+
+```bash
+tlyboy artifact ls [-p <项目>]      # 列表，--trashed 看回收站
+tlyboy artifact get <id>            # 把正文打到标准输出
+tlyboy artifact rm <id>             # 进回收站，--purge 才是真删
+tlyboy artifact restore <id>
+
+tlyboy project ls
+tlyboy project new <名字>
+tlyboy project rename <id|名字> <新名字>
+tlyboy project rm <id|名字>
+tlyboy project restore <id|名字>
+```
+
+`rm` 是挪进回收站而不是销毁，而且删之前一定先问一句。在管道或 CI 里没法问，它就直接拒绝而不是替你猜；真要删加 `--yes`。
 
 ## 使用许可
 

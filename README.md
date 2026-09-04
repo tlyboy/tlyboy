@@ -39,8 +39,25 @@ Opens your browser so you can approve this machine, then stores the credential i
 Markdown documents, mermaid mind maps and task lists all go up the same way — the kind and the title are inferred from the file:
 
 ```bash
-tlyboy push report.md -p Product
+tlyboy artifact push report.md -p Product
 ```
+
+### Everything else
+
+```bash
+tlyboy artifact ls [-p <project>]      # list, --trashed for the recycle bin
+tlyboy artifact get <id>               # print the body to stdout
+tlyboy artifact rm <id>                # to the recycle bin, --purge to destroy
+tlyboy artifact restore <id>
+
+tlyboy project ls
+tlyboy project new <name>
+tlyboy project rename <id|name> <new-name>
+tlyboy project rm <id|name>
+tlyboy project restore <id|name>
+```
+
+`rm` moves things to a recycle bin rather than destroying them, and asks before it does. In a pipe or a CI job — nowhere to ask — it refuses instead of guessing; pass `--yes` when you mean it.
 
 ## License
 
